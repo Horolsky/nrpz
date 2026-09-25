@@ -43,7 +43,14 @@ __all__ = ["NrpZ", "NrpError", "decode_message", "dbm", "main", "VID", "PID", "D
 
 VID, PID = 0x0AAD, 0x000C
 EP_OUT, EP_IN = 0x01, 0x82
-R_TEXT, R_PARAM, R_RESULT, R_STATE, R_END = 0x54, 0x4C, 0x45, 0x5A, 0x52
+R_TEXT, R_PARAM, R_INT, R_RESULT, R_STATE, R_END = (
+    0x54,
+    0x4C,
+    0x4E,
+    0x45,
+    0x5A,
+    0x52,
+)
 
 # Device status codes carried in a record's status byte (see R&S nrpdef.h).
 DEV_ERR = {
@@ -76,6 +83,8 @@ def decode_message(records):
             parts[rec[4] | (rec[5] << 8)] = rec[6:16]
         elif t in (R_PARAM, R_RESULT):
             floats.append(struct.unpack("<f", rec[4:8])[0])
+        elif t == R_INT:
+            floats.append(struct.unpack("<i", rec[4:8])[0])
         # 'Z' state / 'z' keepalive / 'M' misc: ignored
     out = bytearray()
     for off in sorted(parts):
@@ -248,7 +257,7 @@ class NrpZ:
                 st = rec[1]  # result status: over-range/overload/etc.
                 w = struct.unpack("<f", rec[4:8])[0]
                 self._drain()
-                if st:
+                if st in DEV_ERR:
                     raise NrpError(DEV_ERR.get(st, f"result status 0x{st:02x}"))
                 return w
             if rec[0] == R_END and rec[1]:
