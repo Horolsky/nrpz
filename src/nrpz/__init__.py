@@ -17,6 +17,7 @@ Read  : stream of 16-byte records from EP 0x82 (bulk IN). byte[0] = record type:
           'T' 0x54  text     : byte[4:6]=uint16 LE offset, byte[6:16]=10 chars
           'L' 0x4c  parameter: float32 LE at byte[4:8]      (e.g. FREQ readback)
           'E' 0x45  result   : float32 LE at byte[4:8]; byte[1]=result status
+          'N' 0x44  result   : integer LE at byte[4:8]; byte[1]=result status
           'Z' 0x5a  state    : byte[2]=trigger state (0 idle,2 wait,3 measuring)
           'R' 0x52  end/ack  : byte[1]=status/error code (0=OK, e.g. 0x89=unknown)
         The sensor answers EVERY command with one message ending in an 'R'; a
@@ -38,8 +39,10 @@ import time
 import usb.core
 import usb.util
 
+from nrpz.status import NrpStatus
+
 __version__ = "0.1.2"
-__all__ = ["NrpZ", "NrpError", "decode_message", "dbm", "main", "VID", "PID", "DEV_ERR"]
+__all__ = ["NrpZ", "NrpError", "decode_message", "dbm", "main", "VID", "PID"]
 
 VID, PID = 0x0AAD, 0x000C
 EP_OUT, EP_IN = 0x01, 0x82
@@ -52,19 +55,12 @@ R_TEXT, R_PARAM, R_INT, R_RESULT, R_STATE, R_END = (
     0x52,
 )
 
-# Device status codes carried in a record's status byte (see R&S nrpdef.h).
-DEV_ERR = {
-    0x02: "over-range: A/D limit reached, result may be wrong",
-    0x08: "OVERLOAD: reduce RF input power immediately",
-    0x40: "result questionable (disrupted USB transfer); re-measure",
-}
-
 
 class NrpError(Exception):
     pass
 
 
-def decode_message(records):
+def decode_message(records: list[bytes]):
     """Parse a list of 16-byte response records into (status, text, floats).
 
     Pure function (no I/O) so the framing logic is unit-testable without
@@ -140,7 +136,7 @@ class NrpZ:
     def _rec(self, timeout_ms):
         return bytes(self.dev.read(EP_IN, 16, timeout=timeout_ms))
 
-    def _read_records(self, idle_ms, max_ms):
+    def _read_records(self, idle_ms, max_ms) -> list[bytes]:
         """Read raw 16-byte records up to and including the 'R' terminator.
         Inactivity timeout: keeps waiting while records arrive (including 'z'
         keepalives during slow ops), stops on 'R' or `idle_ms` of silence."""
@@ -254,11 +250,13 @@ class NrpZ:
             if len(rec) < 8:
                 continue
             if rec[0] == R_RESULT:
-                st = rec[1]  # result status: over-range/overload/etc.
+                st = NrpStatus(rec[1])
                 w = struct.unpack("<f", rec[4:8])[0]
                 self._drain()
-                if st in DEV_ERR:
-                    raise NrpError(DEV_ERR.get(st, f"result status 0x{st:02x}"))
+                if st.is_fatal:
+                    raise NrpError(f"fatal error: {st}")
+                elif st.is_error:
+                    print(f"WARNING: non-fatal error {st}", file=sys.stderr)
                 return w
             if rec[0] == R_END and rec[1]:
                 raise NrpError(f"measurement error 0x{rec[1]:02x}")
