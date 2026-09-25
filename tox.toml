@@ -1,0 +1,24 @@
+requires = ["tox>=4.61,<5"]
+
+env_list = [
+    "py312",
+    "py314",
+]
+
+skip_missing_interpreters = true
+
+[env_run_base]
+description = "Run nrpz unit tests under {base_python}"
+package = "wheel"
+wheel_build_env = ".pkg"
+deps = [
+    "pytest==8.3.4",
+]
+commands = [
+    [
+        "python",
+        "-c",
+        "import nrpz, pathlib; print('nrpz:', pathlib.Path(nrpz.__file__).resolve())",
+    ],
+    ["python", "-m", "pytest", "-v", "tests"],
+]
