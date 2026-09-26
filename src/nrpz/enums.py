@@ -1,7 +1,51 @@
 from enum import IntEnum
 
+__all__ = ["NrpRtype", "NrpStatus"]
 
-class NrpStatus(IntEnum):
+
+class NrpAbsEnum(IntEnum):
+    """
+    Abstract Enum
+    """
+
+    def __new__(cls, value, description=None):
+        obj = int.__new__(cls, value)
+        obj._value_ = value
+        obj._description = description
+        return obj
+
+    @classmethod
+    def _missing_(cls, value):
+        if isinstance(value, int):
+            new_member = int.__new__(cls, value)
+            new_member._name_ = "UNKNOWN"
+            new_member._value_ = value
+            new_member._description = None
+            cls._value2member_map_[value] = new_member
+            return new_member
+
+    def __str__(self):
+        description = f"; {self._description}" if self._description else ""
+        return f"{self.__class__.__name__}.{self.name} (aka {self.value:#x}{description}>"
+
+
+
+class NrpRtype(NrpAbsEnum):
+    """
+    NRP Sensor record type
+    """
+
+    TEXT      = 0x54
+    PARAM     = 0x4C
+    INT       = 0x4E
+    RESULT    = 0x45
+    STATE     = 0x5A
+    END       = 0x52
+    KEEPALIVE = 0x7a
+    MISC      = 0x4d
+
+
+class NrpStatus(NrpAbsEnum):
     """
     NRP Sensor status error codes
     Source: NrpControl2.h (Declarations for the NRP Control Library)
@@ -39,25 +83,6 @@ class NrpStatus(IntEnum):
     FLASHPROG           = 0x8b
     CALDATANOTPRESENT   = 0x8c
 
-    def __new__(cls, value, description=None):
-        obj = int.__new__(cls, value)
-        obj._value_ = value
-        obj._description = description
-        return obj
-
-    @classmethod
-    def _missing_(cls, value):
-        if isinstance(value, int):
-            new_member = int.__new__(cls, value)
-            new_member._name_ = "UNKNOWN"
-            new_member._value_ = value
-            new_member._description = None
-            cls._value2member_map_[value] = new_member
-            return new_member
-
-    def __str__(self):
-        description = f"; {self._description}" if self._description else ""
-        return f"<{self.name} ({self.value:#x}){description}>"
 
     @property
     def is_error(self) -> bool:

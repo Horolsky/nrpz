@@ -32,62 +32,24 @@ decoded.
 """
 
 import math
-import struct
 import sys
 import time
 
 import usb.core
 import usb.util
 
-from nrpz.status import NrpStatus
+from nrpz.codec import decode_message
+from nrpz.enums import NrpRtype
 
 __version__ = "0.1.2"
 __all__ = ["NrpZ", "NrpError", "decode_message", "dbm", "main", "VID", "PID"]
 
 VID, PID = 0x0AAD, 0x000C
 EP_OUT, EP_IN = 0x01, 0x82
-R_TEXT, R_PARAM, R_INT, R_RESULT, R_STATE, R_END = (
-    0x54,
-    0x4C,
-    0x4E,
-    0x45,
-    0x5A,
-    0x52,
-)
-
 
 class NrpError(Exception):
     pass
 
-
-def decode_message(records: list[bytes]):
-    """Parse a list of 16-byte response records into (status, text, floats).
-
-    Pure function (no I/O) so the framing logic is unit-testable without
-    hardware. 'T' records are reassembled by offset into text; 'L'/'E' records
-    yield float32 values; the terminating 'R' record supplies the status byte.
-    """
-    parts, floats, status = {}, [], 0
-    for rec in records:
-        if len(rec) < 6:
-            continue
-        t = rec[0]
-        if t == R_END:
-            status = rec[1]
-            break
-        elif t == R_TEXT:
-            parts[rec[4] | (rec[5] << 8)] = rec[6:16]
-        elif t in (R_PARAM, R_RESULT):
-            floats.append(struct.unpack("<f", rec[4:8])[0])
-        elif t == R_INT:
-            floats.append(struct.unpack("<i", rec[4:8])[0])
-        # 'Z' state / 'z' keepalive / 'M' misc: ignored
-    out = bytearray()
-    for off in sorted(parts):
-        if len(out) < off:
-            out.extend(b"\x00" * (off - len(out)))
-        out[off : off + 10] = parts[off]
-    return status, out.split(b"\x00", 1)[0].decode("latin1").strip(), floats
 
 
 def dbm(w):
@@ -150,7 +112,7 @@ class NrpZ:
                     break
                 raise
             recs.append(rec)
-            if len(rec) >= 1 and rec[0] == R_END:
+            if len(rec) >= 1 and rec[0] == NrpRtype.END:
                 break
         return recs
 
@@ -163,8 +125,8 @@ class NrpZ:
         """Send a command and consume its ack. Raises on device error status."""
         self.dev.write(EP_OUT, (cmd.rstrip("\n") + "\n").encode(), timeout=2000)
         status, _, _ = self._read_message(idle_ms=2000)
-        if status:
-            raise NrpError(f"{cmd!r} -> device status 0x{status:02x}")
+        if status.is_error:
+            raise NrpError(f"{cmd!r} -> {status}")
 
     def ask(self, cmd, idle_ms=1500, max_ms=15000):
         """Query returning text (str) or, for numeric queries, a float."""
@@ -207,9 +169,9 @@ class NrpZ:
         self.dev.write(EP_OUT, b"CALibration:ZERO:AUTO ONCE\n", timeout=2000)
         status, _, _ = self._read_message(idle_ms=2500, max_ms=20000)
         self._drain()
-        if status:
+        if status.is_error:
             raise NrpError(
-                f"zero rejected (status 0x{status:02x}); disconnect or "
+                f"zero rejected ({status}); disconnect or "
                 "terminate the RF input (needs < ~-30 dBm) and retry"
             )
 
@@ -241,6 +203,7 @@ class NrpZ:
             self.write(c)
         # INIT: ack is 'Z'+'R'; the result is pushed afterwards as an 'E' record.
         self.dev.write(EP_OUT, b"INITiate:IMMediate\n", timeout=2000)
+
         deadline = time.monotonic() + timeout / 1000.0
         while time.monotonic() < deadline:
             try:
@@ -249,17 +212,17 @@ class NrpZ:
                 continue
             if len(rec) < 8:
                 continue
-            if rec[0] == R_RESULT:
-                st = NrpStatus(rec[1])
-                w = struct.unpack("<f", rec[4:8])[0]
+
+            t = rec[0]
+            s, _, floats = decode_message([rec])
+            if s.is_fatal:
+                raise NrpError(f"fatal error: {s}")
+            elif s.is_error:
+                print(f"WARNING: non-fatal error {s}, msg_type: {hex(t)}", file=sys.stderr)
+
+            if floats and t == NrpRtype.RESULT:
                 self._drain()
-                if st.is_fatal:
-                    raise NrpError(f"fatal error: {st}")
-                elif st.is_error:
-                    print(f"WARNING: non-fatal error {st}", file=sys.stderr)
-                return w
-            if rec[0] == R_END and rec[1]:
-                raise NrpError(f"measurement error 0x{rec[1]:02x}")
+                return floats[0]
         raise NrpError("measurement timed out (no result pushed)")
 
 
@@ -305,9 +268,12 @@ def main(argv=None):
                 print(f"{w:.6e} W   ({dbm(w):.2f} dBm)  @ {freq:g} Hz")
             else:  # raw SCPI passthrough
                 for c in args:
-                    print(f"{c} -> {s.ask(c)!r}" if "?" in c else f"{c} (sent)")
-                    if "?" not in c:
+                    if "?" in c:
+                        print(s.ask(c))
+                    else:
                         s.write(c)
+                        print(f"{c} (sent)")
+
     except NrpError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
