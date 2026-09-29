@@ -6,6 +6,8 @@ regression tests of the observed wire protocol.
 Run with `pytest`, or directly: `python tests/test_nrpz.py`.
 """
 
+import pytest
+
 from nrpz import NrpZ, dbm, decode_message, main
 
 # Real *IDN? response: four 'T' text records (offset in bytes[4:6]) + 'R' end.
@@ -163,6 +165,36 @@ def test_dbm():
     assert dbm(0.0) == float("-inf")
     assert dbm(-1e-9) == float("-inf")  # negative (below zero) -> -inf
 
+
+from nrpz.codec import decode_record
+from nrpz.enums import NrpRtype, NrpStatus, NrpDataType, NrpTriggerState
+
+def test_decode_float_result():
+    rec = decode_record(
+        bytes.fromhex("4509030037bd50350000000000000000")
+    )
+
+    assert rec.type is NrpRtype.FLOAT_RESULT
+    assert rec.status is NrpStatus.HARDWARE
+    assert rec.group == 3
+    assert rec.parameter == 0
+    assert rec.payload.values[0] == pytest.approx(7.776138204462768e-7)
+    assert rec.payload.values[1:] == (0.0, 0.0)
+
+def test_still_alive_byte1_is_not_status():
+    rec = decode_record(
+        bytes.fromhex("7a8f0300000000000000000000000000")
+    )
+
+    assert rec.type is NrpRtype.STILL_ALIVE
+    assert rec.status is None
+    assert rec.payload.marker == 0x8F
+    assert rec.payload.state is NrpTriggerState.MEASURING
+
+@pytest.mark.parametrize("size", [0, 15, 17])
+def test_record_requires_exactly_16_bytes(size):
+    with pytest.raises(ValueError):
+        decode_record(bytes(size))
 
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):

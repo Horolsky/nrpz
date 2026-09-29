@@ -38,7 +38,7 @@ import time
 import usb.core
 import usb.util
 
-from nrpz.codec import decode_message
+from nrpz.codec import decode_message, decode_record
 from nrpz.enums import NrpRtype
 
 __version__ = "0.1.2"
@@ -175,7 +175,7 @@ class NrpZ:
                 "terminate the RF input (needs < ~-30 dBm) and retry"
             )
 
-    def measure_power(self, freq_hz=1e9, count=4, timeout=8000, check_freq=True):
+    def measure_power(self, freq_hz=1e9, count=4, timeout=8000, offset_dB=0, check_freq=True):
         """One-shot average-power measurement. Returns calibrated power in watts
         (signed float32 -- near the noise floor with no signal it can read
         slightly negative, which is normal). `freq_hz` sets the calibration
@@ -197,6 +197,8 @@ class NrpZ:
             f"SENSe:AVERage:COUNt {count}",
             "SENSe:AVERage:TCONtrol REPeat",  # single-shot: clear+refill the
             "SENSe:AVERage:STATe ON",  # filter, so integration = count windows
+            f"SENSe:CORRection:OFFSet {offset_dB:g}",
+            f"SENSe:CORRection:OFFSet:STATe ON",
             "INITiate:CONTinuous OFF",
             "TRIGger:SOURce IMMediate",
         ):
@@ -205,6 +207,7 @@ class NrpZ:
         self.dev.write(EP_OUT, b"INITiate:IMMediate\n", timeout=2000)
 
         deadline = time.monotonic() + timeout / 1000.0
+        last_error = None # avoid repeating warnings
         while time.monotonic() < deadline:
             try:
                 rec = self._rec(1000)
@@ -213,16 +216,18 @@ class NrpZ:
             if len(rec) < 8:
                 continue
 
-            t = rec[0]
-            s, _, floats = decode_message([rec])
-            if s.is_fatal:
-                raise NrpError(f"fatal error: {s}")
-            elif s.is_error:
-                print(f"WARNING: non-fatal error {s}, msg_type: {hex(t)}", file=sys.stderr)
+            result = decode_record(rec)
+            if result.type == NrpRtype.STILL_ALIVE:
+                continue
+            if result.status.is_fatal:
+                raise NrpError(f"fatal error: {result.status}")
+            elif result.status.is_error and result.status != last_error:
+                last_error = result.status
+                print(f"WARNING: non-fatal error {result.status}", file=sys.stderr)
 
-            if floats and t == NrpRtype.RESULT:
+            if result.type == NrpRtype.RESULT and result.payload.values:
                 self._drain()
-                return floats[0]
+                return result.payload.values[0]
         raise NrpError("measurement timed out (no result pushed)")
 
 

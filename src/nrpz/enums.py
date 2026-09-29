@@ -26,23 +26,27 @@ class NrpAbsEnum(IntEnum):
 
     def __str__(self):
         description = f"; {self._description}" if self._description else ""
-        return f"{self.__class__.__name__}.{self.name} (aka {self.value:#x}{description}>"
-
+        return f"<{self.__class__.__name__}.{self.name} ({self.value:#x}{description})>"
 
 
 class NrpRtype(NrpAbsEnum):
-    """
-    NRP Sensor record type
-    """
+    TEXT              = ord("T"), "T"
+    FLOAT_PARAM       = ord("L"), "L"
+    BITFIELD_PARAM    = ord("M"), "M"
+    LONG_PARAM        = ord("N"), "N"
+    FLOAT_RESULT      = ord("E"), "E"
+    COMMAND_ACCEPTED  = ord("R"), "R"
+    STATE_CHANGED     = ord("Z"), "Z"
+    STILL_ALIVE       = ord("z"), "z"
 
-    TEXT      = 0x54
-    PARAM     = 0x4C
-    INT       = 0x4E
-    RESULT    = 0x45
-    STATE     = 0x5A
-    END       = 0x52
-    KEEPALIVE = 0x7a
-    MISC      = 0x4d
+    # Existing compatibility aliases (debt)
+    PARAM = FLOAT_PARAM
+    INT = LONG_PARAM
+    RESULT = FLOAT_RESULT
+    END = COMMAND_ACCEPTED
+    KEEPALIVE = STILL_ALIVE
+    MISC = BITFIELD_PARAM
+
 
 
 class NrpStatus(NrpAbsEnum):
@@ -91,3 +95,28 @@ class NrpStatus(NrpAbsEnum):
     @property
     def is_fatal(self) -> bool:
         return bool(NrpStatus.GENERIC.value & self.value)
+
+
+
+class NrpDataType(NrpAbsEnum):
+    BINARY_BLOCK = 0
+    BITFIELD_LIMIT = 1
+    BITFIELD_PARAM = 2
+    BITFIELD_FEATURE = 3
+    FLOAT_ARRAY = 4
+    FLOAT_LIMIT = 5
+    FLOAT_PARAM = 6
+    FLOAT_RESULT = 7
+    LONG_LIMIT = 8
+    LONG_PARAM = 9
+    STRING = 10
+    AUX_FLOAT_ARRAY = 11
+
+
+class NrpTriggerState(NrpAbsEnum):
+    UNKNOWN = -1
+    IDLE = 0
+    RESERVED = 1
+    WAIT_FOR_TRIGGER = 2
+    MEASURING = 3
+
