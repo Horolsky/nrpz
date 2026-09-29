@@ -31,6 +31,7 @@ CCDF waveform block reads (the native binary typed-queue protocol) are not
 decoded.
 """
 
+import argparse
 import math
 import sys
 import time
@@ -55,6 +56,31 @@ class NrpError(Exception):
 def dbm(w):
     """Convert power in watts to dBm. Returns -inf for non-positive power."""
     return 10 * math.log10(w / 1e-3) if w and w > 0 else float("-inf")
+
+
+def humanize(x: float):
+    """Human-readable representation of numerical value"""
+    magnitude = abs(x)
+    if magnitude < 1e-9:
+        return x * 1e12, 'p'
+    if magnitude < 1e-6:
+        return x * 1e9, 'n'
+    if magnitude < 1e-3:
+        return x * 1e6, 'µ'
+    if magnitude < 1e0:
+        return x * 1e3, 'm'
+    if magnitude < 1e3:
+        return x, ''
+    if magnitude < 1e6:
+        return x * 1e-3, 'K'
+    if magnitude < 1e9:
+        return x * 1e-6, 'M'
+    if magnitude < 1e12:
+        return x * 1e-9, 'G'
+    if magnitude < 1e15:
+        return x * 1e-12, 'T'
+
+    return x * 1e-15, 'E'
 
 
 class NrpZ:
@@ -249,30 +275,60 @@ examples:
   nrpz 'SENS:FREQ?'
 """
 
+def _argument_parser():
+    parser = argparse.ArgumentParser(
+        prog="nrpz",
+        description="Native Linux driver for R&S NRP-Z USB power sensors",
+        epilog="examples:\n  nrpz\n  nrpz power 2.4e9 --zero\n  nrpz 'SENS:FREQ?'",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    commands = parser.add_subparsers(dest="command", metavar="command")
+    commands.add_parser("idn", aliases=["id"], help="print sensor identity (*IDN?)")
+    commands.add_parser("test", aliases=["selftest"], help="run the sensor self-test")
+
+    power = commands.add_parser(
+        "power", aliases=["meas", "measure"], help="measure average power"
+    )
+    power.add_argument("freq_hz", type=float, nargs="?", default=1e9, help="frequency in Hz")
+    power.add_argument("--offset", "-o", type=float, default=0, help="external offset in dB")
+    power.add_argument("--zero", action="store_true", help="run zero calibration first")
+
+    raw = commands.add_parser("raw", help=argparse.SUPPRESS)
+    raw.add_argument("scpi", nargs="+", metavar="SCPI")
+    return parser
+
 
 def main(argv=None):
     args = sys.argv[1:] if argv is None else list(argv)
-    if args and args[0] in ("-h", "--help", "help"):
-        print(HELP)
-        return 0
+    if args and args[0] == "help":
+        args[0] = "--help"
+
+    commands = {"id", "idn", "test", "selftest", "power", "meas", "measure", "raw"}
+    if args and args[0] not in commands and args[0] not in ("-h", "--help"):
+        args.insert(0, "raw")
+
+    try:
+        parsed = _argument_parser().parse_args(args)
+    except SystemExit as exc:
+        return exc.code
+
     try:
         with NrpZ() as s:
-            if not args or args[0] in ("id", "idn"):
+            if parsed.command is None or parsed.command in ("id", "idn"):
                 print(s.idn())
-            elif args[0] in ("test", "selftest"):
+            elif parsed.command in ("test", "selftest"):
                 print(s.selftest())
-            elif args[0] in ("power", "meas", "measure"):
-                nums = [a for a in args[1:] if not a.startswith("--")]
-                freq = float(nums[0]) if nums else 1e9
-                if "--zero" in args:
+            elif parsed.command in ("power", "meas", "measure"):
+                if parsed.zero:
                     try:
                         s.zero()
                     except NrpError as e:
                         print(f"warning: {e}", file=sys.stderr)
-                w = s.measure_power(freq)
-                print(f"{w:.6e} W   ({dbm(w):.2f} dBm)  @ {freq:g} Hz")
+                w = s.measure_power(parsed.freq_hz, offset_dB=parsed.offset)
+                hw, uw = humanize(w)
+                print(f"{hw:.3f} {uw}W    {dbm(w):.2f} dBm")
             else:  # raw SCPI passthrough
-                for c in args:
+                for c in parsed.scpi:
                     if "?" in c:
                         print(s.ask(c))
                     else:
